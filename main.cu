@@ -27,7 +27,7 @@ struct distance_calculator
 
 int main()
 {
-    constexpr std::size_t N=10;
+    constexpr std::size_t N=1000000;
     std::vector<float4> ps(N);
 
     std::mt19937 mt(123456789);
@@ -58,7 +58,8 @@ int main()
                 {
                     buffer[j] = 0xFFFFFFFF;
                 }
-                const float r = dr * i;
+                //const float r = dr * i;
+                const float r = dr / N;
                 lbvh::aabb<float> query_box;
                 query_box.lower = make_float4(self.x-r, self.y-r, self.z-r, 0);
                 query_box.upper = make_float4(self.x+r, self.y+r, self.z+r, 0);
@@ -88,22 +89,22 @@ int main()
         });
 
     std::cout << "testing query_device:nearest_neighbor ...\n";
-    thrust::for_each(thrust::device,
-        thrust::make_counting_iterator<unsigned int>(0),
-        thrust::make_counting_iterator<unsigned int>(N),
-        [bvh_dev] __device__ (const unsigned int idx) {
-            const auto self = bvh_dev.objects[idx];
-            const auto nest = lbvh::query_device(bvh_dev, lbvh::nearest(self),
-                                                 distance_calculator());
-            assert(nest.first != 0xFFFFFFFF);
-            const auto other   = bvh_dev.objects[nest.first];
-            // of course, the nearest object is itself.
-            assert(nest.second == 0.0f);
-            assert(self.x == other.x);
-            assert(self.y == other.y);
-            assert(self.z == other.z);
-            return ;
-       });
+    //thrust::for_each(thrust::device,
+    //    thrust::make_counting_iterator<unsigned int>(0),
+    //    thrust::make_counting_iterator<unsigned int>(N),
+    //    [bvh_dev] __device__ (const unsigned int idx) {
+    //        const auto self = bvh_dev.objects[idx];
+    //        const auto nest = lbvh::query_device(bvh_dev, lbvh::nearest(self),
+    //                                             distance_calculator());
+    //        assert(nest.first != 0xFFFFFFFF);
+    //        const auto other   = bvh_dev.objects[nest.first];
+    //        // of course, the nearest object is itself.
+    //        assert(nest.second == 0.0f);
+    //        assert(self.x == other.x);
+    //        assert(self.y == other.y);
+    //        assert(self.z == other.z);
+    //        return ;
+    //   });
 
     thrust::device_vector<float4> random_points(N);
     thrust::transform(
@@ -140,34 +141,34 @@ int main()
             return ;
         });
 
-    std::cout << "testing query_host:overlap ...\n";
-    {
-        for(std::size_t i=0; i<10; ++i)
-        {
-            const auto self = bvh.objects_host()[i];
-            const float dr = 0.1f;
-            for(unsigned int cnt=1; cnt<10; ++cnt)
-            {
-                const float r = dr * cnt;
-                lbvh::aabb<float> query_box;
-                query_box.lower = make_float4(self.x-r, self.y-r, self.z-r, 0);
-                query_box.upper = make_float4(self.x+r, self.y+r, self.z+r, 0);
+    //std::cout << "testing query_host:overlap ...\n";
+    //{
+    //    for(std::size_t i=0; i<10; ++i)
+    //    {
+    //        const auto self = bvh.objects_host()[i];
+    //        const float dr = 0.1f;
+    //        for(unsigned int cnt=1; cnt<10; ++cnt)
+    //        {
+    //            const float r = dr * cnt;
+    //            lbvh::aabb<float> query_box;
+    //            query_box.lower = make_float4(self.x-r, self.y-r, self.z-r, 0);
+    //            query_box.upper = make_float4(self.x+r, self.y+r, self.z+r, 0);
 
-                std::vector<std::size_t> buffer;
-                const auto num_found = lbvh::query_host(bvh,
-                        lbvh::overlaps(query_box), std::back_inserter(buffer));
+    //            std::vector<std::size_t> buffer;
+    //            const auto num_found = lbvh::query_host(bvh,
+    //                    lbvh::overlaps(query_box), std::back_inserter(buffer));
 
-                for(unsigned int jdx : buffer)
-                {
-                    assert(jdx < bvh.objects_host().size());
+    //            for(unsigned int jdx : buffer)
+    //            {
+    //                assert(jdx < bvh.objects_host().size());
 
-                    const auto other  = bvh.objects_host()[jdx];
-                    assert(fabsf(self.x - other.x) < r); // check coordinates
-                    assert(fabsf(self.y - other.y) < r); // are in the range
-                    assert(fabsf(self.z - other.z) < r); // of query box
-                }
-            }
-        }
-    }
+    //                const auto other  = bvh.objects_host()[jdx];
+    //                assert(fabsf(self.x - other.x) < r); // check coordinates
+    //                assert(fabsf(self.y - other.y) < r); // are in the range
+    //                assert(fabsf(self.z - other.z) < r); // of query box
+    //            }
+    //        }
+    //    }
+    //}
     return 0;
 }

@@ -21,7 +21,7 @@ unsigned int query_device(
     using aabb_type  = typename bvh_type::aabb_type;
     using node_type  = typename bvh_type::node_type;
 
-    index_type  stack[64]; // is it okay?
+    __shared__ index_type  stack[64]; // is it okay?
     index_type* stack_ptr = stack;
     *stack_ptr++ = 0; // root node is always 0
 
@@ -88,7 +88,7 @@ thrust::pair<unsigned int, Real> query_device(
     using node_type  = typename bvh_type::node_type;
 
     // pair of {node_idx, mindist}
-    thrust::pair<index_type, real_type>  stack[64];
+    __shared__ thrust::pair<index_type, real_type>  stack[64];
     thrust::pair<index_type, real_type>* stack_ptr = stack;
     *stack_ptr++ = thrust::make_pair(0, mindist(bvh.aabbs[0], q.target));
 
