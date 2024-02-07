@@ -18,10 +18,14 @@ template<typename T>
 __device__ __host__
 inline bool intersects(const aabb<T>& lhs, const aabb<T>& rhs) noexcept
 {
-    if(lhs.upper.x < rhs.lower.x || rhs.upper.x < lhs.lower.x) {return false;}
-    if(lhs.upper.y < rhs.lower.y || rhs.upper.y < lhs.lower.y) {return false;}
-    if(lhs.upper.z < rhs.lower.z || rhs.upper.z < lhs.lower.z) {return false;}
-    return true;
+    //if(lhs.upper.x < rhs.lower.x || rhs.upper.x < lhs.lower.x) {return false;}
+    //if(lhs.upper.y < rhs.lower.y || rhs.upper.y < lhs.lower.y) {return false;}
+    //if(lhs.upper.z < rhs.lower.z || rhs.upper.z < lhs.lower.z) {return false;}
+    //return true;
+
+    return lhs.upper.x >= rhs.lower.x && rhs.upper.x >= lhs.lower.x &&
+        lhs.upper.y >= rhs.lower.y && rhs.upper.y >= lhs.lower.y &&
+        lhs.upper.z >= rhs.lower.z && rhs.upper.z >= lhs.lower.z;
 }
 
 __device__ __host__

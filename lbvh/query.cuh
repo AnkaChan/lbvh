@@ -156,6 +156,104 @@ thrust::pair<unsigned int, Real> query_device(
     while (stack < stack_ptr);
     return thrust::make_pair(nearest, dist_to_nearest_object);
 }
+// query object index that is within a certain radius.
+//
+// requirements:
+// - DistanceCalculator must be able to calc distance between a point to an object.
+//
+template<typename Real, typename Objects, bool IsConst,
+    typename DistanceCalculator, typename OutputIterator>
+__device__
+unsigned int radius_query_device(
+    const detail::basic_device_bvh<Real, Objects, IsConst>& bvh,
+    const query_nearest<Real>& q, int32_t selfId, DistanceCalculator calc_dist,
+    Real r, OutputIterator outiter,
+    unsigned int max_buffer_size) noexcept
+{
+    using bvh_type = detail::basic_device_bvh<Real, Objects, IsConst>;
+    using real_type = typename bvh_type::real_type;
+    using index_type = typename bvh_type::index_type;
+    using aabb_type = typename bvh_type::aabb_type;
+    using node_type = typename bvh_type::node_type;
+
+    // pair of {node_idx, mindist}
+    __shared__ index_type  stack[64]; // is it okay?
+    index_type* stack_ptr = stack;
+    *stack_ptr++ = 0;
+
+    unsigned int num_found = 0;
+
+    do
+    {
+        const auto node = *--stack_ptr;
+        const index_type L_idx = bvh.nodes[node].left_idx;
+        const index_type R_idx = bvh.nodes[node].right_idx;
+
+        const aabb_type& L_box = bvh.aabbs[L_idx];
+        const aabb_type& R_box = bvh.aabbs[R_idx];
+
+        const real_type L_mindist = mindist(L_box, q.target);
+        const real_type R_mindist = mindist(R_box, q.target);
+
+        // there should be an object that locates within minmaxdist.
+
+        if (L_mindist <= r) // L is worth considering
+        {
+            const auto obj_idx = bvh.nodes[L_idx].object_idx;
+            
+            if (obj_idx != 0xFFFFFFFF) // leaf node
+            {
+                if (obj_idx == selfId)
+                {
+                    continue;
+                }
+                const real_type dist = calc_dist(q.target, bvh.objects[obj_idx]);
+                if (dist <= r)
+                {
+                    *outiter++ = obj_idx;
+                    ++num_found;
+                }
+
+                if (num_found >= max_buffer_size)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                *stack_ptr++ = L_idx;
+            }
+        }
+        if (R_mindist <= r) // R is worth considering
+        {
+            const auto obj_idx = bvh.nodes[R_idx].object_idx;
+            if (obj_idx != 0xFFFFFFFF) // leaf node
+            {
+                if (obj_idx == selfId)
+                {
+                    continue;
+                }
+                const real_type dist = calc_dist(q.target, bvh.objects[obj_idx]);
+                if (dist <= r)
+                {
+                    *outiter++ = obj_idx;
+                    ++num_found;
+                }
+
+                if (num_found >= max_buffer_size)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                *stack_ptr++ = R_idx;
+            }
+        }
+        assert(stack_ptr < stack + 64);
+    } while (stack < stack_ptr);
+    return num_found;
+}
 
 template<typename Real, typename Objects, typename AABBGetter,
          typename MortonCodeCalculator, typename OutputIterator>

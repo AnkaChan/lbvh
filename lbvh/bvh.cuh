@@ -301,8 +301,11 @@ class bvh
         assert(objects_h_.size() == objects_d_.size());
         if(objects_h_.size() == 0u) {return;}
 
+        // one object is a leaf node
         const unsigned int num_objects        = objects_h_.size();
+        // first num_internal_nodes are none leaf nodes
         const unsigned int num_internal_nodes = num_objects - 1;
+        // number of al nodes in the bvh
         const unsigned int num_nodes          = num_objects * 2 - 1;
 
         // --------------------------------------------------------------------
@@ -314,17 +317,24 @@ class bvh
         default_aabb.upper.y = -inf; default_aabb.lower.y = inf;
         default_aabb.upper.z = -inf; default_aabb.lower.z = inf;
 
+        // resize the aabb node restorage; initialize it as default_aabb
         this->aabbs_.resize(num_nodes, default_aabb);
 
+        // this computes the aabb for each object, aabb_getter_type() is a functor 
+        // which takes the *InputIterator (which contains the object) and output a value
+        // which is put to *OutputIterator (contains aabb)
         thrust::transform(this->objects_d_.begin(), this->objects_d_.end(),
                 aabbs_.begin() + num_internal_nodes, aabb_getter_type());
 
+        // use reduced merge to get the bounding box of the whole scene, for calculating 
+        // the morton codes in the next stage
         const auto aabb_whole = thrust::reduce(
             aabbs_.begin() + num_internal_nodes, aabbs_.end(), default_aabb,
             [] __host__ __device__(const aabb_type& lhs, const aabb_type& rhs) {
                 return merge(lhs, rhs);
             });
 
+        // caculate morton code
         thrust::device_vector<unsigned int> morton(num_objects);
         thrust::transform(this->objects_d_.begin(), this->objects_d_.end(),
             aabbs_.begin() + num_internal_nodes, morton.begin(),
@@ -376,7 +386,7 @@ class bvh
 
         thrust::transform(indices.begin(), indices.end(),
             this->nodes_.begin() + num_internal_nodes,
-            [] __host__ __device__(const index_type idx)
+            [] __host__ __device__ (const index_type idx)
             {
                 node_type n;
                 n.parent_idx = 0xFFFFFFFF;
@@ -403,6 +413,7 @@ class bvh
 
         // --------------------------------------------------------------------
         // create AABB for each node by bottom-up strategy
+        // this could be used for refitting the bvh
 
         thrust::device_vector<int> flag_container(num_internal_nodes, 0);
         const auto flags = flag_container.data().get();

@@ -2,6 +2,29 @@
 #include <random>
 #include <vector>
 #include <thrust/random.h>
+#include <algorithm>
+#include <numeric>      // std::iota
+
+#define CUDA_CHECK_RET(status)                                                                                                  \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        auto ret = (status);                                                                                           \
+        if (ret != 0)                                                                                                  \
+        {                                                                                                              \
+            std::cerr << "Cuda failure: " << ret << " - " << cudaGetErrorString(ret) <<  std::endl;                                                 \
+            abort();                                                                                                   \
+        }                                                                                                              \
+    } while (0)
+
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort = true)
+{
+    if (code != cudaSuccess)
+    {
+        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort) exit(code);
+    }
+}
 
 struct aabb_getter
 {
@@ -25,6 +48,27 @@ struct distance_calculator
     }
 };
 
+inline void mortonSortingCPU(const std::vector<float4>& ps, std::vector<float4>& ps_out) {
+    std::vector<uint32_t> mortonCodes;
+    for (auto & p : ps)
+    {
+        mortonCodes.push_back(lbvh::morton_code(p));
+
+    }
+    std::vector<int> indices(ps.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(indices.begin(), indices.end(),
+        [&](int A, int B) -> bool {
+            return mortonCodes[A] < mortonCodes[B];
+        });
+    ps_out.clear();
+    
+    for (auto i : indices) {
+        ps_out.push_back(ps[i]);
+    }
+
+}
+
 int main()
 {
     constexpr std::size_t N=1000000;
@@ -32,6 +76,8 @@ int main()
 
     std::mt19937 mt(123456789);
     std::uniform_real_distribution<float> uni(0.0, 1.0);
+
+    
 
     for(auto& p : ps)
     {
@@ -52,94 +98,193 @@ int main()
             unsigned int buffer[10];
             const auto self = bvh_dev.objects[idx];
             const float  dr = 0.1f;
-            for(std::size_t i=1; i<10; ++i)
+            for(unsigned int j=0; j<10; ++j)
             {
-                for(unsigned int j=0; j<10; ++j)
-                {
-                    buffer[j] = 0xFFFFFFFF;
-                }
-                //const float r = dr * i;
-                const float r = dr / N;
-                lbvh::aabb<float> query_box;
-                query_box.lower = make_float4(self.x-r, self.y-r, self.z-r, 0);
-                query_box.upper = make_float4(self.x+r, self.y+r, self.z+r, 0);
-                const auto num_found = lbvh::query_device(
-                        bvh_dev, lbvh::overlaps(query_box), buffer, 10);
-
-                for(unsigned int j=0; j<10; ++j)
-                {
-                    const auto jdx    = buffer[j];
-                    if(j >= num_found)
-                    {
-                        assert(jdx == 0xFFFFFFFF);
-                        continue;
-                    }
-                    else
-                    {
-                        assert(jdx != 0xFFFFFFFF);
-                        assert(jdx < bvh_dev.num_objects);
-                    }
-                    const auto other  = bvh_dev.objects[jdx];
-                    assert(fabsf(self.x - other.x) < r); // check coordinates
-                    assert(fabsf(self.y - other.y) < r); // are in the range
-                    assert(fabsf(self.z - other.z) < r); // of query box
-                }
+                buffer[j] = 0xFFFFFFFF;
             }
-            return ;
-        });
+            //const float r = dr * i;
+            const float r = dr / N;
+            lbvh::aabb<float> query_box;
+            query_box.lower = make_float4(self.x-r, self.y-r, self.z-r, 0);
+            query_box.upper = make_float4(self.x+r, self.y+r, self.z+r, 0);
+            const auto num_found = lbvh::query_device(
+                    bvh_dev, lbvh::overlaps(query_box), buffer, 10);
 
-    std::cout << "testing query_device:nearest_neighbor ...\n";
-    //thrust::for_each(thrust::device,
-    //    thrust::make_counting_iterator<unsigned int>(0),
-    //    thrust::make_counting_iterator<unsigned int>(N),
-    //    [bvh_dev] __device__ (const unsigned int idx) {
-    //        const auto self = bvh_dev.objects[idx];
-    //        const auto nest = lbvh::query_device(bvh_dev, lbvh::nearest(self),
-    //                                             distance_calculator());
-    //        assert(nest.first != 0xFFFFFFFF);
-    //        const auto other   = bvh_dev.objects[nest.first];
-    //        // of course, the nearest object is itself.
-    //        assert(nest.second == 0.0f);
-    //        assert(self.x == other.x);
-    //        assert(self.y == other.y);
-    //        assert(self.z == other.z);
-    //        return ;
-    //   });
-
-    thrust::device_vector<float4> random_points(N);
-    thrust::transform(
-        thrust::make_counting_iterator<unsigned int>(0),
-        thrust::make_counting_iterator<unsigned int>(N),
-        random_points.begin(), [] __device__(const unsigned int idx) {
-            thrust::default_random_engine rand;
-            thrust::uniform_real_distribution<float> uni(0.0f, 1.0f);
-            rand.discard(idx);
-            const float x = uni(rand);
-            const float y = uni(rand);
-            const float z = uni(rand);
-            return make_float4(x, y, z, 0);
-        });
-
-    thrust::for_each(random_points.begin(), random_points.end(),
-        [bvh_dev] __device__ (const float4 pos) {
-            const auto calc = distance_calculator();
-            const auto nest = lbvh::query_device(bvh_dev, lbvh::nearest(pos), calc);
-            assert(nest.first != 0xFFFFFFFF);
-
-            for(unsigned int i=0; i<bvh_dev.num_objects; ++i)
+            for(unsigned int j=0; j<10; ++j)
             {
-                const auto dist = calc(bvh_dev.objects[i], pos);
-                if(i == nest.first)
+                const auto jdx    = buffer[j];
+                if(j >= num_found)
                 {
-                    assert(dist == nest.second);
+                    assert(jdx == 0xFFFFFFFF);
+                    continue;
                 }
                 else
                 {
-                    assert(dist >= nest.second);
+                    assert(jdx != 0xFFFFFFFF);
+                    assert(jdx < bvh_dev.num_objects);
                 }
+                const auto other  = bvh_dev.objects[jdx];
+                assert(fabsf(self.x - other.x) < r); // check coordinates
+                assert(fabsf(self.y - other.y) < r); // are in the range
+                assert(fabsf(self.z - other.z) < r); // of query box
             }
             return ;
         });
+
+    std::cout << "testing query_device:radius query ...\n";
+    thrust::for_each(thrust::device,
+        thrust::make_counting_iterator<int32_t>(0),
+        thrust::make_counting_iterator<int32_t>(N),
+        [bvh_dev] __device__(int32_t idx) {
+        unsigned int buffer[10];
+        const auto self = bvh_dev.objects[idx];
+        const float  dr = 10.f;
+        for (unsigned int j = 0; j < 10; ++j)
+        {
+            buffer[j] = 0xFFFFFFFF;
+        }
+        //const float r = dr * i;
+        const float r = dr / N;
+
+        const auto num_found = lbvh::radius_query_device(
+            bvh_dev, lbvh::nearest(self), idx, distance_calculator(), r, buffer, 10);
+
+        auto dist = distance_calculator();
+
+        for (unsigned int j = 0; j < 10; ++j)
+        {
+            const auto jdx = buffer[j];
+            if (j >= num_found)
+            {
+                assert(jdx == 0xFFFFFFFF);
+                continue;
+            }
+            else
+            {
+                assert(jdx != 0xFFFFFFFF);
+                assert(dist(self, bvh_dev.objects[jdx]) < r);
+            }
+
+        }
+        //if (num_found > 0)
+        //{
+        //    printf("Point %d has %d neighbors.\n", idx, num_found);
+        //}
+
+        return;
+    });
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+
+    std::cout << "testing query_device:nearest_neighbor ...\n";
+    thrust::for_each(thrust::device,
+        thrust::make_counting_iterator<unsigned int>(0),
+        thrust::make_counting_iterator<unsigned int>(N),
+        [bvh_dev] __device__ (const unsigned int idx) {
+            const auto self = bvh_dev.objects[idx];
+            const auto nest = lbvh::query_device(bvh_dev, lbvh::nearest(self),
+                                                 distance_calculator());
+            assert(nest.first != 0xFFFFFFFF);
+            const auto other   = bvh_dev.objects[nest.first];
+            // of course, the nearest object is itself.
+            assert(nest.second == 0.0f);
+            assert(self.x == other.x);
+            assert(self.y == other.y);
+            assert(self.z == other.z);
+            return ;
+       });
+
+   std::vector<float4> ps_random(N);
+
+    for (auto& p : ps_random)
+    {
+        p.x = uni(mt);
+        p.y = uni(mt);
+        p.z = uni(mt);
+    }
+    std::vector<float4> ps_random_sorted(N);
+
+    mortonSortingCPU(ps_random, ps_random_sorted);
+
+    thrust::device_vector<float4> random_points(ps_random_sorted.begin(), ps_random_sorted.end()) ;
+
+    std::cout << "testing query_device for random points: radius query ...\n";
+    thrust::for_each(thrust::device,
+        random_points.begin(),
+        random_points.end(),
+        [bvh_dev] __device__(const float4 pos) {
+        unsigned int buffer[10];
+        const float  dr = 10.f;
+        for (unsigned int j = 0; j < 10; ++j)
+        {
+            buffer[j] = 0xFFFFFFFF;
+        }
+        //const float r = dr * i;
+        const float r = dr / N;
+
+        const auto num_found = lbvh::radius_query_device(
+            bvh_dev, lbvh::nearest(pos), -1, distance_calculator(), r, buffer, 10);
+
+        auto dist = distance_calculator();
+
+        for (unsigned int j = 0; j < 10; ++j)
+        {
+            const auto jdx = buffer[j];
+            if (j >= num_found)
+            {
+                assert(jdx == 0xFFFFFFFF);
+                continue;
+            }
+            else
+            {
+                assert(jdx != 0xFFFFFFFF);
+                assert(dist(pos, bvh_dev.objects[jdx]) < r);
+            }
+
+        }
+        //if (num_found > 0)
+        //{
+        //    printf("Point %d has %d neighbors.\n", idx, num_found);
+        //}
+
+        return;
+    });
+
+   /* thrust::device_vector<float4> random_points(N);
+
+   // thrust::transform(
+   //     thrust::make_counting_iterator<unsigned int>(0),
+   //     thrust::make_counting_iterator<unsigned int>(N),
+   //     random_points.begin(), [] __device__(const unsigned int idx) {
+   //         thrust::default_random_engine rand;
+   //         thrust::uniform_real_distribution<float> uni(0.0f, 1.0f);
+   //         rand.discard(idx);
+   //         const float x = uni(rand);
+   //         const float y = uni(rand);
+   //         const float z = uni(rand);
+   //         return make_float4(x, y, z, 0);
+   //     });*/
+
+   // thrust::for_each(random_points.begin(), random_points.end(),
+   //     [bvh_dev] __device__ (const float4 pos) {
+   //         const auto calc = distance_calculator();
+   //         const auto nest = lbvh::query_device(bvh_dev, lbvh::nearest(pos), calc);
+   //         assert(nest.first != 0xFFFFFFFF);
+
+   //         for(unsigned int i=0; i<bvh_dev.num_objects; ++i)
+   //         {
+   //             const auto dist = calc(bvh_dev.objects[i], pos);
+   //             //if(i == nest.first)
+   //             //{
+   //             //    assert(dist == nest.second);
+   //             //}
+   //             //else
+   //             //{
+   //             //    assert(dist >= nest.second);
+   //             //}
+   //         }
+   //         return ;
+   //     });
 
     //std::cout << "testing query_host:overlap ...\n";
     //{
